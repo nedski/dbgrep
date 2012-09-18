@@ -171,7 +171,7 @@ int main(int argc, char *argv[])
     /* c_get returns a block of data in value.data of which only
        value.size is the data record. Must take first (value.size - 1)
        chars of value.data */
-    val_str = (char *)malloc(value.size);
+    val_str = (char *)malloc(value.size + 1);
 
     if (val_str == NULL)
       fail("malloc");
