@@ -1,8 +1,11 @@
 /* Find regex in value of a Berkeley DB */
-/* $Id: dbgrep.c,v 1.4 2000/03/21 15:43:20 neilk Exp neilk $ */
+/* $Id: dbgrep.c,v 1.5 2012/09/14 20:54:18 neilk Exp $ */
 
-/* 
- $Log: dbgrep.c,v $
+/*
+ * $Log: dbgrep.c,v $
+ * Revision 1.5  2012/09/14 20:54:18  neilk
+ * Updated for Berkeley version 5.1.29
+ *
  * Revision 1.4  2000/03/21 15:43:20  neilk
  * Added -v switch.
  *
@@ -19,6 +22,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <errno.h>
 #include <db.h>
 #include <sys/types.h>
@@ -29,20 +33,42 @@ char *my_name;
 char *database;
 char *rcs_id;
 
-/* initial size of data for value of data */
-int  val_alloc = (1024 * 4); 
+/* substr returns len chars from src starting at offset */
 
-/* sub declarations */
-void substr(char dest[], char src[], int offset, int len);
-void fail(char msg[]);
-void usage(void);
+void substr(char dest[], char src[], int offset, int len)
+{
+  int i;
+  for(i = 0; i < len && src[offset + i] != '\0'; i++)
+    dest[i] = src[i + offset];
+  dest[i] = '\0';
+} /* substr */
 
+
+
+void fail(char msg[])
+{
+  perror(msg);
+  exit(EXIT_FAILURE);
+} /* fail */
+
+
+void usage(void)
+{
+  fprintf(stderr, "usage: %s -d<database> -r<regex> [-v]\n", my_name);
+  fprintf(stderr, "Look for <regex> in values of Berkeley DB <database>.\n\n");
+  fprintf(stderr, "  -d: database to search\n");
+  fprintf(stderr, "      Default is %s\n", database);
+  fprintf(stderr, "  -r: regular expression; see regex(5)\n");
+  fprintf(stderr, "  -v: verbose; print summary\n\n");
+  fprintf(stderr, "%s\n\n", rcs_id);
+  exit(EXIT_FAILURE);
+}
 
 int main(int argc, char *argv[])
 {
 
   /* database */
-  DB *db;
+  DB *dbp;
   DBC *dbc;
   DBT key, value;
   int ret;
@@ -55,11 +81,9 @@ int main(int argc, char *argv[])
   int total = 0;
   int matches = 0;
   int verbose = 0;
-  char *val_str;
-  char *regex;
-
-  database = "/files/web/dev/db/user-db"; /* default to prod db */
-  rcs_id = "$Id: dbgrep.c,v 1.4 2000/03/21 15:43:20 neilk Exp neilk $";
+  char *val_str, *regex;
+  database = "/files/web/production/db/user-db"; /* default to prod db */
+  rcs_id = "$Id: dbgrep.c,v 1.5 2012/09/14 20:54:18 neilk Exp $";
 
   /* process command line */
   my_name = argv[0];
@@ -115,11 +139,11 @@ int main(int argc, char *argv[])
   if (regcomp(&re, regex, REG_EXTENDED|REG_NOSUB) != 0)
     fail("regcomp");
 
-
+  /* create db structure */
+  db_create(&dbp, NULL, 0);
 
   /* open db file */
-  /* ret = db_open(database, DB_HASH, DB_RDONLY, 0666, NULL, NULL, &db); */
-  ret = DB->open(database, DB_HASH, DB_RDONLY, 0666, NULL, NULL, &db);
+  ret = dbp->open(dbp, NULL, database, NULL, DB_HASH, DB_RDONLY, 0666);
 
   if(ret)
     fail("db_open");
@@ -127,7 +151,7 @@ int main(int argc, char *argv[])
 
 
   /* Create a cursor */
-  ret = db->cursor(db, NULL, &dbc, 0);
+  ret = dbp->cursor(dbp, NULL, &dbc, 0);
 
   if(ret)
     fail("cursor");
@@ -138,29 +162,20 @@ int main(int argc, char *argv[])
   memset(&key, 0, sizeof(key));
   memset(&value, 0, sizeof(value));
 
-  /* Allocate memory for val_str */
-  val_str = (char *)malloc(val_alloc);
 
-  if (val_str == NULL)
-    fail("malloc"); 
-  
+
   /* Cycle through the database */
   while((ret = dbc->c_get(dbc, &key, &value, DB_NEXT)) 
 	!= DB_NOTFOUND) {
     
-    /* check size; if necessary, reallocate memory for val_str */
-    if ( val_alloc < value.size ) {
-      while (val_alloc < value.size) {
-	val_alloc *= 2; 
-      }
-      val_str = (char*)realloc(val_str, val_alloc);
-      if (val_str == NULL)
-	fail("realloc");
-    }
-    
     /* c_get returns a block of data in value.data of which only
        value.size is the data record. Must take first (value.size - 1)
        chars of value.data */
+    val_str = (char *)malloc(value.size + 1);
+
+    if (val_str == NULL)
+      fail("malloc");
+
     substr(val_str, value.data, (size_t) 0, value.size);
 
     /* Compare regexp against data */
@@ -175,7 +190,6 @@ int main(int argc, char *argv[])
     free(val_str);
 
     total++;
-    /* printf("%d\n", total); */
 
   } /* while */
 
@@ -189,38 +203,12 @@ int main(int argc, char *argv[])
   }
 
   /* Clean up & exit */
-  db->sync(db, 0);
+  dbp->sync(dbp, 0);
   dbc->c_close(dbc); /* close the cursor */
-  db->close(db, 0);
+  dbp->close(dbp, 0);
 
   exit(EXIT_SUCCESS);
 
 } /* main */
 
 
-/* substr returns len chars from src starting at offset */
-void substr(char dest[], char src[], int offset, int len)
-{
-  int i;
-  for(i = 0; i < len && src[offset + i] != '\0'; i++)
-    dest[i] = src[i + offset];
-  dest[i] = '\0';
-} /* substr */
-
-void fail(char msg[])
-{
-  perror(msg);
-  exit(EXIT_FAILURE);
-} /* fail */
-
-void usage(void)
-{
-  fprintf(stderr, "usage: %s -d<database> -r<regex> [-v]\n", my_name);
-  fprintf(stderr, "Look for <regex> in values of Berkeley DB <database>.\n\n");
-  fprintf(stderr, "  -d: database to search\n");
-  fprintf(stderr, "      Default is %s\n", database);
-  fprintf(stderr, "  -r: regular expression; see regex(5)\n");
-  fprintf(stderr, "  -v: verbose; print summary\n\n");
-  fprintf(stderr, "%s\n\n", rcs_id);
-  exit(EXIT_FAILURE);
-}
